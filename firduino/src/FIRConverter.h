@@ -8,6 +8,8 @@ extern "C"
 {
 #endif
 
+#define Comp_rate 0.5f    //used in AGC
+
 typedef struct fir_f32_s {
     float  *coeffs;     /*!< Pointer to the coefficient buffer.*/
     float  *delay;      /*!< Pointer to the delay line buffer.*/
@@ -213,55 +215,141 @@ public:
 	  virtual void write( T* sample, int count )
 	  {
 		if(this->direction == 1)
-		{  
-	    for ( int i = 0 ; i < count ; i++ )
-	      {
+		{
+		  //Version with AGC
+		  static float g_limL; // = 1.0f;
+          float desiredAmpLSB = 3000.0;  // Set your desired max output amplitude here  
+	      for ( int i = 0 ; i < count ; i++ )
+	      /*{
 	    	T out = this->gain * ( this->destLeft[i] + this->destRight[i] );
 
 	    	sample[i*2] = out;
 	    	sample[i*2+1] = out;
-	      }
+	      }*/
+		  
+		  {		  			
+		  float Re=this->destLeft[i]; //*this->gain;
+          float Im=this->destRight[i]; //*this->gain;          
+		  float signal = Re + Im;		  
+		  //RXsig[i] *=Gain_SSB_CW;
+          float absl = fabs(signal)-desiredAmpLSB;
+          if( absl<0 ) absl = 0;
+
+            if(absl>g_limL)
+              g_limL = g_limL*0.9f + absl*(1.0f-0.9f);
+            else
+              g_limL*=0.9998f;
+          			  
+		  signal = signal * (desiredAmpLSB/(Comp_rate * g_limL + desiredAmpLSB));   //Comp_rate je 0.5f
+		  
+          T out = this->gain * signal;
+		   
+			sample[i*2] = out;
+	    	sample[i*2+1] = out;						
+	      }		  
 		}
 		
 		if(this->direction == 2)
-		{  
+		{ // USB demodulation
+		//Version with AGC
+		  static float g_limL; // = 1.0f;
+          float desiredAmpLSB = 3000.0;  // Set your desired max output amplitude here	
 	    for ( int i = 0 ; i < count ; i++ )
-	      {
+	      /*{
 	    	T out = this->gain * ( this->destLeft[i] - this->destRight[i] );
 
 	    	sample[i*2] = out;
 	    	sample[i*2+1] = out;
-	      }
+	      }*/
+		  {		  			
+		  float Re=this->destLeft[i]; //*this->gain;
+          float Im=this->destRight[i]; //*this->gain;          
+		  float signal = Re - Im;		  
+		  //RXsig[i] *=Gain_SSB_CW;
+          float absl = fabs(signal)-desiredAmpLSB;
+          if( absl<0 ) absl = 0;
+
+            if(absl>g_limL)
+              g_limL = g_limL*0.9f + absl*(1.0f-0.9f);
+            else
+              g_limL*=0.9998f;
+          			  
+		  signal = signal * (desiredAmpLSB/(Comp_rate * g_limL + desiredAmpLSB));   //Comp_rate je 0.5f
+		  
+          T out = this->gain * signal;
+		   
+			sample[i*2] = out;
+	    	sample[i*2+1] = out;						
+	      }		  
 		}
 		
-		if(this->direction == 3)
-		{  
-	    for ( int i = 0 ; i < count ; i++ )
+		
+		/*//AMdemod verified version1, works but no AGC
+       if(this->direction == 3)
+		{ 
+        static int16_t wold; // = 0;   // za vsako novo točko začne iz nič lahko probaš brez 0 
+	    int16_t w;
+        for ( int i = 0 ; i < count ; i++ )
 	      {
-	    	T out = this->gain * 2 * sqrt( this->destLeft[i] * this->destLeft[i] + this->destRight[i] * this->destRight[i]);
+	    	T out = this->gain * sqrt( (this->destLeft[i] * this->destLeft[i] + this->destRight[i] * this->destRight[i])*2);  //2 is to make it 1,42
 			
-			/*static int16_t as_last;   // GW8RDI mod - replaced LP filter: DC removal done in sdr_rx()
-		    int16_t as = out + (int16_t)((float)as_last * 0.9999f); // Reduce from 0.9999f for less bass response
-		    out = as - as_last;
-		    as_last = as;*/
-			
-			static int16_t wold;   // prenesel iz Twnsy convolution SDR
-		    int16_t w = out + wold * 0.9999f; // yes, I want a superb bass response
-		    this->destLeft[i] = w - wold;  // to je v input audiosamplih levega kanala ???
+		    w = out + (int16_t)((float)wold * 0.9999f); // yes, I want a superb bass response
+		    out = w - wold;  // DC removal
             wold = w;
 		   
 			sample[i*2] = out;
 	    	sample[i*2+1] = out;
 						
 	      }
-		}
-		
-		if(this->direction == 4)
+		}*/
+				
+		//AMdemod verified version2, includes AGC
+       if(this->direction == 3)
+		{ 
+        static float zDC; // = 0;   // za vsako novo točko začne iz nič lahko probaš brez 0
+		static float g_lim; // = 1.0f;
+        float desiredAmplitude = 5000.0;  // Set your desired max carier limit output amplitude here
+        for ( int i = 0 ; i < count ; i++ )
+	      {
+	    	//T out = this->gain * sqrt( (this->destLeft[i] * this->destLeft[i] + this->destRight[i] * this->destRight[i])*2);  //2 is to make it 1,42
 			
-		// Perform FM demodulation		
-		{  
-	    for ( int i = 0 ; i < count ; i++ )
-	      { static float prevPhase = 0.0;
+		  float Re=this->destLeft[i]; //*this->gain;
+          float Im=this->destRight[i]; //*this->gain;
+          float Demod_AM = 2.0f * sqrt(Re*Re+Im*Im); //Tukaj dodaj float za gain npr *2.0f
+		  
+          zDC = Demod_AM*0.001 + zDC*0.999; //LPF for getting DC component more digits for lower bass
+		  float signal = Demod_AM - zDC;
+		  
+		  float absl = fabs(zDC) - desiredAmplitude;
+          if( absl<0 ) absl = 0;
+		  
+		  if(absl>g_lim)
+	      {
+              g_lim = g_lim*0.9f + absl*(1.0f-0.9f);
+	      }
+			  
+            else
+	      {
+              g_lim*=0.9994f;
+	      }
+			  
+		  signal = signal * (desiredAmplitude/(Comp_rate * g_lim + desiredAmplitude));   //Comp_rate je 50.0f
+		  
+          T out = this->gain * signal;
+		   
+			sample[i*2] = out;
+	    	sample[i*2+1] = out;
+						
+	      }
+		}
+				
+			
+		if(this->direction == 4)	
+		{
+		// Perform FM demodulation my first version		
+	    /*for ( int i = 0 ; i < count ; i++ )
+	      { 
+	        static float prevPhase; // = 0.0;
 			float currentPhase = atan2(this->destLeft[i], this->destRight[i]);
             float phaseDiff = currentPhase - prevPhase;  
 			  
@@ -275,17 +363,54 @@ public:
 		
 		// Update the previous phase
         prevPhase = currentPhase;
-			  
-	    	/*// G8RDI mod - enabled FM differentiator
-			int16_t z0 = _arctan3(this->destLeft[i], this->destRight[i]);
-			static int16_t z1 = z0; // G8RDI mod - initialised static
-			T out = z0 - z1; // Differentiator
-			z1 = z0;*/
 		   
 			sample[i*2] = out;
 	    	sample[i*2+1] = out;
 						
+	      }*/
+		  
+		 static float zDC; // = 0;   // za vsako novo točko začne iz nič lahko probaš brez 0
+		 static float prevPhase; // = 0.0;
+		 static float g_lim; // = 1.0f;
+		 float desiredAmpFM = 5000.0;  // Set your desired max carier limit output amplitude here
+		   
+		  for ( int i = 0 ; i < count ; i++ )
+	      { 
+	        
+			float currentPhase = atan2(this->destLeft[i], this->destRight[i]);
+            float phaseDiff = currentPhase - prevPhase;
+			  
+	    // Adjust the phase difference to ensure it stays within a reasonable range
+        if (phaseDiff > M_PI) {
+        phaseDiff -= 2 * M_PI;
+        } else if (phaseDiff < -M_PI) {
+        phaseDiff += 2 * M_PI;
+        }
+		float Demod_FM = phaseDiff * 8000.0f; // mogoče daj na 10000
+          zDC = Demod_FM*0.003 + zDC*0.997; // LPF for getting DC component
+		  float signal = 5000.0f*(Demod_FM - zDC); // Reject DC
+          //RXsig[i] = 5000.0f*(Demod_FM - zDC); // Reject DC
+		  float absl = fabs(signal)-desiredAmpFM;
+          if( absl<0 ) absl = 0;
+		  if(absl>g_lim)
+	      {
+              g_lim = g_lim*0.9f + absl*(1.0f-0.9f);
+	      }		  
+            else
+	      {
+              g_lim*=0.999f;
 	      }
+		  
+		  signal = signal * (desiredAmpFM/(Comp_rate * g_lim + desiredAmpFM));   //Comp_rate je 0.5f
+		  
+		  T out = this->gain * signal;	
+		// Update the previous phase
+        prevPhase = currentPhase;
+		   
+			sample[i*2] = out;
+	    	sample[i*2+1] = out;						
+	      }
+		  		  
 		}
 			
 	  }
